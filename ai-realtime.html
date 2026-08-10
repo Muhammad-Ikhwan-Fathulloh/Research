@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Kamera AI Realtime — XR Scan</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #05050a;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; }
+  #video, #overlay {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    max-width: 100%; max-height: 100%;
+  }
+  #video { object-fit: cover; filter: saturate(0.9) brightness(0.95); }
+  #overlay { pointer-events: none; }
+
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: env(safe-area-inset-top, 16px) 16px 12px;
+    z-index: 20; display: flex; align-items: flex-start; justify-content: space-between;
+    background: linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0)); color: #fff; pointer-events: none;
+  }
+  #topbar h1 { font-size: 16px; font-weight: 600; letter-spacing: 0.3px; }
+  #topbar .sub { font-family: 'SF Mono', monospace; font-size: 10.5px; letter-spacing: 0.4px; opacity: 0.75; margin-top: 4px; color: #8fd8ff; }
+  #topbar .sub b { color: #a8ffcf; font-weight: 600; }
+
+  #badge {
+    font-family: 'SF Mono', monospace; font-size: 11px; padding: 6px 12px; border-radius: 999px;
+    background: rgba(20,20,30,0.6); border: 1px solid rgba(255,255,255,0.15); color: #7fd4ff;
+    pointer-events: auto; white-space: nowrap;
+  }
+  #badge.on { color: #7dffb0; border-color: rgba(125,255,176,0.35); }
+  #badge.err { color: #ff8a8a; border-color: rgba(255,138,138,0.35); }
+
+  #controls {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 14px 16px calc(env(safe-area-inset-bottom, 16px) + 14px);
+    display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;
+    z-index: 20; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.75));
+  }
+
+  .btn {
+    padding: 12px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(22,22,32,0.75); backdrop-filter: blur(12px); color: #fff;
+    font-size: 12.5px; font-weight: 500; letter-spacing: 0.2px;
+    display: flex; align-items: center; gap: 7px; cursor: pointer; transition: all 0.15s ease; white-space: nowrap;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn.primary { background: rgba(90,130,255,0.85); border-color: rgba(140,170,255,0.5); }
+  .btn.xr-active { background: rgba(130,90,255,0.85); border-color: rgba(180,150,255,0.6); }
+  .btn.lidar { background: rgba(20,200,150,0.25); border-color: rgba(60,255,190,0.5); color: #baffe6; }
+  .btn:disabled { opacity: 0.35; }
+
+  #switch-cam { width: 46px; height: 46px; border-radius: 50%; justify-content: center; padding: 0; font-size: 17px; flex-shrink: 0; }
+
+  #detections {
+    position: fixed; top: env(safe-area-inset-top, 16px); right: 12px; margin-top: 70px; max-width: 46%; z-index: 20;
+    display: flex; flex-direction: column; gap: 6px; pointer-events: none;
+  }
+  .det-chip {
+    font-family: 'SF Mono', monospace; font-size: 10.5px; padding: 5px 10px; border-radius: 8px;
+    background: rgba(10,10,18,0.72); border-left: 3px solid #7fd4ff; color: #eaf4ff;
+    text-align: right; animation: pop 0.15s ease;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateX(6px);} to { opacity: 1; transform: translateX(0);} }
+
+  #radar-wrap { position: fixed; bottom: 90px; left: 16px; z-index: 20; width: 108px; height: 108px; pointer-events: none; opacity: 0.92; }
+  #radar-label {
+    position: fixed; bottom: 200px; left: 20px; z-index: 20;
+    font-family: 'SF Mono', monospace; font-size: 9px; letter-spacing: 1px; color: rgba(143, 216, 255, 0.7); pointer-events: none;
+  }
+
+  #loading {
+    position: fixed; inset: 0; background: #05050a;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: #fff; z-index: 100;
+  }
+  #loading .ring {
+    width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.15);
+    border-top-color: #7fd4ff; animation: spin 0.9s linear infinite;
+  }
+  #loading p { font-size: 13px; opacity: 0.6; letter-spacing: 0.5px; font-family: 'SF Mono', monospace; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #error-box {
+    position: fixed; inset: 0; background: rgba(5,5,10,0.96);
+    display: none; align-items: center; justify-content: center; z-index: 200; padding: 32px; color: #fff; text-align: center;
+  }
+  #error-box.show { display: flex; }
+  #error-box .inner { max-width: 340px; }
+  #error-box h2 { font-size: 17px; margin-bottom: 8px; }
+  #error-box p { font-size: 13px; opacity: 0.7; line-height: 1.5; margin-bottom: 18px; }
+
+  #toast {
+    position: fixed; top: 90px; left: 50%; transform: translateX(-50%) translateY(-10px);
+    background: rgba(10,10,18,0.9); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 12.5px;
+    padding: 10px 18px; border-radius: 10px; z-index: 300; max-width: 86%; text-align: center; line-height: 1.4;
+    opacity: 0; pointer-events: none; transition: all 0.25s ease;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  #ar-overlay { position: fixed; inset: 0; z-index: 500; display: none; font-family: 'SF Mono', monospace; color: #fff; }
+  #ar-overlay.active { display: block; }
+
+  #ar-hud-top { position: fixed; top: 0; left: 0; right: 0; padding: env(safe-area-inset-top, 16px) 16px 10px; background: linear-gradient(rgba(0,0,0,0.75), rgba(0,0,0,0)); z-index: 490; }
+  #ar-hud-top .title { font-size: 14px; font-weight: 600; letter-spacing: 0.4px; color: #baffe6; }
+  #ar-hud-top .stats { font-size: 10.5px; opacity: 0.8; margin-top: 4px; color: #9fe8ff; }
+  #ar-hud-top .note { font-size: 9.5px; opacity: 0.55; margin-top: 3px; }
+
+  #floorplan-wrap {
+    position: fixed; top: 92px; right: 12px; z-index: 500;
+    background: rgba(6,8,14,0.55); border: 1px solid rgba(140,255,220,0.3); border-radius: 12px; padding: 8px; backdrop-filter: blur(6px);
+  }
+  #floorplan-label { font-size: 9px; letter-spacing: 1.5px; opacity: 0.7; text-align: center; margin-bottom: 4px; color: #baffe6; }
+  #floorplan { display: block; border-radius: 6px; background: rgba(0,0,0,0.35); }
+
+  #ar-scene-canvas { position: fixed; inset: 0; z-index: 480; pointer-events: auto; touch-action: none; }
+
+  #ar-hud-bottom {
+    position: fixed; bottom: 0; left: 0; right: 0; padding: 14px 16px calc(env(safe-area-inset-bottom, 16px) + 14px);
+    display: flex; justify-content: center; gap: 10px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.8));
+    z-index: 490;
+  }
+  #ar-instruction {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    text-align: center; font-size: 12.5px; opacity: 0.85; max-width: 260px;
+    background: rgba(6,8,14,0.55); padding: 14px 18px; border-radius: 12px;
+    border: 1px solid rgba(140,255,220,0.25); transition: opacity 0.4s ease; z-index: 501;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading"><div class="ring"></div><p>MEMUAT MODEL AI...</p></div>
+
+<div id="error-box">
+  <div class="inner">
+    <h2>Kamera tidak bisa diakses</h2>
+    <p id="error-msg">Pastikan kamu memberi izin kamera, dan halaman ini dibuka lewat HTTPS (atau localhost).</p>
+    <button class="btn primary" onclick="location.reload()">Coba lagi</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="topbar">
+  <div>
+    <h1>Kamera AI Realtime</h1>
+    <div class="sub" id="scan-stats">SCANNING · <b>0</b> titik mesh · <b>0</b> anchor aktif</div>
+  </div>
+  <div id="badge">memuat…</div>
+</div>
+
+<div id="detections"></div>
+<div id="radar-label">RADAR ANCHOR</div>
+<canvas id="radar-wrap"></canvas>
+
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div id="controls">
+  <button id="switch-cam" class="btn" title="Ganti kamera depan/belakang">⟳</button>
+  <button id="toggle-xr" class="btn xr-active">Mode: XR Penuh</button>
+  <button id="toggle-detect" class="btn primary">Jeda</button>
+  <button id="scan-room-btn" class="btn lidar">Scan Bentuk Ruangan</button>
+</div>
+
+<!-- ===== overlay mode "Scan Ruangan" (three.js, bukan WebXR, jalan di semua browser) ===== -->
+<div id="ar-overlay">
+  <canvas id="ar-scene-canvas"></canvas>
+
+  <div id="ar-hud-top">
+    <div class="title">SCAN BENTUK RUANGAN</div>
+    <div class="stats" id="ar-stats">0 titik · sudut cakupan 0°</div>
+    <div class="note" id="sensor-status">Menunggu sinyal sensor rotasi…</div>
+  </div>
+
+  <div id="floorplan-wrap">
+    <div id="floorplan-label">DENAH ATAS (LIVE)</div>
+    <canvas id="floorplan" width="160" height="160"></canvas>
+  </div>
+
+  <div id="ar-instruction">Pegang HP tegak lurus di depan dada, lalu putar badan pelan 360° di tempat sambil mengarahkan kamera ke dinding sekeliling ruangan.</div>
+
+  <div id="ar-hud-bottom">
+    <button id="reset-scan-btn" class="btn">Reset Titik</button>
+    <button id="stop-scan-btn" class="btn primary">Selesai Scan</button>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ============================================================
+// BAGIAN 1: kamera + deteksi objek + tampilan XR overlay (mesh, anchor, radar)
+// ============================================================
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const radarCanvas = document.getElementById('radar-wrap');
+const radarCtx = radarCanvas.getContext('2d');
+const badge = document.getElementById('badge');
+const loading = document.getElementById('loading');
+const loadingText = loading.querySelector('p');
+const errorBox = document.getElementById('error-box');
+const errorMsg = document.getElementById('error-msg');
+const switchBtn = document.getElementById('switch-cam');
+const toggleBtn = document.getElementById('toggle-detect');
+const xrBtn = document.getElementById('toggle-xr');
+const detList = document.getElementById('detections');
+const scanStats = document.getElementById('scan-stats');
+const scanRoomBtn = document.getElementById('scan-room-btn');
+const toastEl = document.getElementById('toast');
+
+let model = null;
+let currentStream = null;
+let facingMode = 'environment';
+let detecting = true;
+let xrMode = true;
+let vw = 640, vh = 480;
+let roomScanActive = false;
+
+const COLORS = ['#7fd4ff', '#7dffb0', '#ffd27f', '#ff8ac8', '#c39bff', '#ff8a8a'];
+function colorFor(label) {
+  let h = 0;
+  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
+  return COLORS[h % COLORS.length];
+}
+function setBadge(text, cls) { badge.textContent = text; badge.className = cls || ''; }
+function showError(msg) { errorMsg.textContent = msg; errorBox.classList.add('show'); loading.style.display = 'none'; }
+function toast(msg, ms = 2800) {
+  toastEl.textContent = msg; toastEl.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+async function startCamera() {
+  if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+  const constraints = { audio: false, video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } } };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    currentStream = stream;
+    video.srcObject = stream;
+    await new Promise(res => { video.onloadedmetadata = res; });
+    await video.play();
+    resizeOverlay();
+  } catch (err) {
+    showError(err.name === 'NotAllowedError'
+      ? 'Izin kamera ditolak. Aktifkan izin kamera di pengaturan browser lalu muat ulang halaman.'
+      : 'Tidak bisa membuka kamera: ' + err.message);
+    throw err;
+  }
+}
+
+function resizeOverlay() {
+  vw = video.videoWidth || 640;
+  vh = video.videoHeight || 480;
+  overlay.width = vw; overlay.height = vh;
+  const fit = () => {
+    const scale = Math.min(window.innerWidth / vw, window.innerHeight / vh);
+    const dispW = vw * scale, dispH = vh * scale;
+    [video, overlay].forEach(el => { el.style.width = dispW + 'px'; el.style.height = dispH + 'px'; });
+  };
+  fit();
+  window.onresize = fit;
+  initMesh();
+}
+
+async function loadModel() {
+  loadingText.textContent = 'MEMUAT MODEL AI...';
+  model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+}
+
+let mesh = [], edges = [];
+function initMesh() {
+  const cols = 10, rows = 7;
+  mesh = []; edges = [];
+  const idx = (c, r) => r * (cols + 1) + c;
+  for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+    const jx = (Math.random() - 0.5) * (vw / cols) * 0.35;
+    const jy = (Math.random() - 0.5) * (vh / rows) * 0.35;
+    mesh.push({ x: (c / cols) * vw + jx, y: (r / rows) * vh + jy });
+  }
+  for (let r = 0; r <= rows; r++) for (let c = 0; c <= cols; c++) {
+    if (c < cols) edges.push([idx(c, r), idx(c + 1, r)]);
+    if (r < rows) edges.push([idx(c, r), idx(c, r + 1)]);
+    if (c < cols && r < rows && (c + r) % 2 === 0) edges.push([idx(c, r), idx(c + 1, r + 1)]);
+  }
+}
+function drawMesh(t) {
+  const sweepY = ((t * 90) % (vh + 160)) - 80;
+  const band = 140;
+  ctx.save(); ctx.lineWidth = 1;
+  for (const [i, j] of edges) {
+    const p1 = mesh[i], p2 = mesh[j];
+    const glow = Math.max(0, 1 - Math.abs((p1.y + p2.y) / 2 - sweepY) / band);
+    ctx.strokeStyle = glow > 0.4 ? `rgba(168,140,255,${0.06 + glow * 0.55})` : `rgba(127,212,255,${0.06 + glow * 0.55})`;
+    ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+  }
+  for (const p of mesh) {
+    const glow = Math.max(0, 1 - Math.abs(p.y - sweepY) / band);
+    ctx.beginPath(); ctx.fillStyle = `rgba(160,230,255,${0.18 + glow * 0.75})`;
+    ctx.arc(p.x, p.y, 1.2 + glow * 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+  if (sweepY > 0 && sweepY < vh) {
+    const grad = ctx.createLinearGradient(0, sweepY - 2, 0, sweepY + 2);
+    grad.addColorStop(0, 'rgba(168,140,255,0)'); grad.addColorStop(0.5, 'rgba(190,170,255,0.9)'); grad.addColorStop(1, 'rgba(168,140,255,0)');
+    ctx.fillStyle = grad; ctx.fillRect(0, sweepY - 2, vw, 4);
+  }
+  ctx.restore();
+}
+
+let anchors = [], anchorCounter = 0;
+function updateAnchors(preds, now) {
+  preds.forEach(p => {
+    const [x, y, w, h] = p.bbox;
+    const cx = x + w / 2, cy = y + h / 2;
+    let match = anchors.find(a => a.label === p.class && Math.hypot(a.x - cx, a.y - cy) < Math.max(w, h) * 0.9);
+    if (match) {
+      match.x += (cx - match.x) * 0.35; match.y += (cy - match.y) * 0.35;
+      match.w = w; match.h = h; match.bboxY = y; match.score = p.score; match.lastSeen = now; match.alpha = Math.min(1, match.alpha + 0.15);
+    } else {
+      anchorCounter++;
+      anchors.push({ id: 'A' + String(anchorCounter).padStart(2, '0'), label: p.class, x: cx, y: cy, w, h, bboxY: y, score: p.score, color: colorFor(p.class), lastSeen: now, alpha: 0 });
+    }
+  });
+  anchors = anchors.filter(a => now - a.lastSeen < 1200);
+  anchors.forEach(a => { if (now - a.lastSeen > 150) a.alpha = Math.max(0, a.alpha - 0.06); });
+}
+function drawBracketBox(a) {
+  const x = a.x - a.w / 2, y = a.bboxY, w = a.w, h = a.h, len = Math.min(w, h) * 0.22;
+  ctx.save(); ctx.globalAlpha = a.alpha; ctx.strokeStyle = a.color; ctx.lineWidth = 2.5;
+  [[[x, y + len], [x, y], [x + len, y]], [[x + w - len, y], [x + w, y], [x + w, y + len]],
+   [[x + w, y + h - len], [x + w, y + h], [x + w - len, y + h]], [[x + len, y + h], [x, y + h], [x, y + h - len]]]
+    .forEach(pts => { ctx.beginPath(); ctx.moveTo(...pts[0]); ctx.lineTo(...pts[1]); ctx.lineTo(...pts[2]); ctx.stroke(); });
+  const label = `${a.id} · ${a.label} ${Math.round(a.score * 100)}%`;
+  ctx.font = '600 13px "SF Mono", monospace';
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(8,10,18,0.72)'; ctx.fillRect(x, y - 24, tw + 16, 22);
+  ctx.strokeStyle = a.color; ctx.lineWidth = 1; ctx.strokeRect(x, y - 24, tw + 16, 22);
+  ctx.fillStyle = a.color; ctx.fillText(label, x + 8, y - 8);
+  ctx.restore();
+}
+function drawAnchorPin(a) {
+  ctx.save(); ctx.globalAlpha = a.alpha;
+  const groundY = a.bboxY + a.h;
+  ctx.setLineDash([3, 4]); ctx.strokeStyle = a.color; ctx.lineWidth = 1.3;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(a.x, groundY); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.ellipse(a.x, groundY, 14, 4.5, 0, 0, Math.PI * 2); ctx.strokeStyle = a.color; ctx.lineWidth = 1; ctx.stroke();
+  const s = 6;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y - s); ctx.lineTo(a.x + s, a.y); ctx.lineTo(a.x, a.y + s); ctx.lineTo(a.x - s, a.y); ctx.closePath();
+  ctx.fillStyle = a.color; ctx.fill(); ctx.restore();
+}
+function drawAnchorGraph() {
+  ctx.save(); ctx.lineWidth = 1;
+  for (let i = 0; i < anchors.length; i++) for (let j = i + 1; j < anchors.length; j++) {
+    const a = anchors[i], b = anchors[j];
+    if (Math.hypot(a.x - b.x, a.y - b.y) < Math.max(vw, vh) * 0.5) {
+      ctx.strokeStyle = `rgba(160,200,255,${Math.min(a.alpha, b.alpha) * 0.35})`;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+function drawRadar(t) {
+  const size = 108, dpr = window.devicePixelRatio || 1;
+  if (radarCanvas.width !== size * dpr) {
+    radarCanvas.width = size * dpr; radarCanvas.height = size * dpr;
+    radarCanvas.style.width = size + 'px'; radarCanvas.style.height = size + 'px'; radarCtx.scale(dpr, dpr);
+  }
+  const cx = size / 2, cy = size / 2, R = size / 2 - 6;
+  radarCtx.clearRect(0, 0, size, size);
+  radarCtx.strokeStyle = 'rgba(127,212,255,0.35)'; radarCtx.lineWidth = 1;
+  [1, 0.66, 0.33].forEach(f => { radarCtx.beginPath(); radarCtx.arc(cx, cy, R * f, 0, Math.PI * 2); radarCtx.stroke(); });
+  radarCtx.beginPath(); radarCtx.moveTo(cx - R, cy); radarCtx.lineTo(cx + R, cy); radarCtx.moveTo(cx, cy - R); radarCtx.lineTo(cx, cy + R);
+  radarCtx.strokeStyle = 'rgba(127,212,255,0.15)'; radarCtx.stroke();
+  const angle = (t * 1.1) % (Math.PI * 2);
+  radarCtx.save(); radarCtx.beginPath(); radarCtx.moveTo(cx, cy); radarCtx.arc(cx, cy, R, angle - 0.5, angle); radarCtx.closePath();
+  radarCtx.fillStyle = 'rgba(168,140,255,0.28)'; radarCtx.fill(); radarCtx.restore();
+  anchors.forEach(a => {
+    const px = cx + ((a.x - vw / 2) / vw) * R * 1.7, py = cy + ((a.y - vh / 2) / vh) * R * 1.7;
+    if (Math.hypot(px - cx, py - cy) > R) return;
+    radarCtx.beginPath(); radarCtx.fillStyle = a.color; radarCtx.globalAlpha = a.alpha;
+    radarCtx.arc(px, py, 3, 0, Math.PI * 2); radarCtx.fill(); radarCtx.globalAlpha = 1;
+  });
+  radarCtx.beginPath(); radarCtx.fillStyle = '#fff'; radarCtx.arc(cx, cy, 2.5, 0, Math.PI * 2); radarCtx.fill();
+}
+function renderDetectionList(preds) {
+  detList.innerHTML = '';
+  preds.slice(0, 5).forEach(p => {
+    const chip = document.createElement('div');
+    chip.className = 'det-chip'; chip.style.borderLeftColor = colorFor(p.class);
+    chip.textContent = `${p.class} · ${Math.round(p.score * 100)}%`;
+    detList.appendChild(chip);
+  });
+}
+
+let lastPreds = [], frameCount = 0;
+async function detectLoop() {
+  if (!roomScanActive) {
+    const t = performance.now() / 1000;
+    const now = performance.now();
+    if (video.readyState >= 2) {
+      ctx.clearRect(0, 0, vw, vh);
+      if (xrMode) drawMesh(t);
+      if (detecting && model && frameCount % 2 === 0) { try { lastPreds = await model.detect(video); } catch (e) {} }
+      frameCount++;
+      if (detecting) {
+        if (xrMode) {
+          updateAnchors(lastPreds, now);
+          drawAnchorGraph();
+          anchors.forEach(a => { drawBracketBox(a); drawAnchorPin(a); });
+        } else {
+          lastPreds.forEach(p => {
+            const [x, y, w, h] = p.bbox; const color = colorFor(p.class);
+            ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h);
+            const label = `${p.class} ${Math.round(p.score * 100)}%`;
+            ctx.font = '600 16px system-ui, sans-serif';
+            const tw = ctx.measureText(label).width;
+            ctx.fillStyle = color; ctx.fillRect(x, Math.max(0, y - 24), tw + 12, 24);
+            ctx.fillStyle = '#07070b'; ctx.fillText(label, x + 6, Math.max(16, y - 6));
+          });
+        }
+        renderDetectionList(lastPreds);
+        setBadge(`${lastPreds.length} objek terdeteksi`, 'on');
+        scanStats.innerHTML = `SCANNING · <b>${mesh.length}</b> titik mesh · <b>${anchors.length}</b> anchor aktif`;
+      }
+      if (xrMode) drawRadar(t);
+    }
+  }
+  requestAnimationFrame(detectLoop);
+}
+
+switchBtn.addEventListener('click', async () => {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  setBadge('mengganti kamera…');
+  try { await startCamera(); anchors = []; setBadge(detecting ? 'mendeteksi…' : 'dijeda'); } catch (e) {}
+});
+toggleBtn.addEventListener('click', () => {
+  detecting = !detecting;
+  toggleBtn.textContent = detecting ? 'Jeda' : 'Lanjut';
+  if (!detecting) { ctx.clearRect(0, 0, vw, vh); detList.innerHTML = ''; radarCtx.clearRect(0, 0, radarCanvas.width, radarCanvas.height); setBadge('dijeda'); }
+});
+xrBtn.addEventListener('click', () => {
+  xrMode = !xrMode;
+  xrBtn.textContent = xrMode ? 'Mode: XR Penuh' : 'Mode: Deteksi Saja';
+  xrBtn.className = 'btn' + (xrMode ? ' xr-active' : '');
+  document.getElementById('radar-wrap').style.display = xrMode ? 'block' : 'none';
+  document.getElementById('radar-label').style.display = xrMode ? 'block' : 'none';
+  if (!xrMode) radarCtx.clearRect(0, 0, radarCanvas.width, radarCanvas.height);
+});
+
+// ============================================================
+// BAGIAN 2: Scan Bentuk Ruangan — three.js + sensor orientasi HP
+// (Tidak pakai WebXR/immersive-ar, jadi jalan di hampir semua
+// browser mobile modern: Chrome, Safari iOS, Samsung Internet, dll.
+// Ini estimasi visual dari kamera + rotasi, BUKAN pengukuran laser presisi.)
+// ============================================================
+const arOverlay = document.getElementById('ar-overlay');
+const arStats = document.getElementById('ar-stats');
+const arInstruction = document.getElementById('ar-instruction');
+const floorplanCanvas = document.getElementById('floorplan');
+const fpCtx = floorplanCanvas.getContext('2d');
+const resetScanBtn = document.getElementById('reset-scan-btn');
+const stopScanBtn = document.getElementById('stop-scan-btn');
+const arSceneCanvas = document.getElementById('ar-scene-canvas');
+
+let arRenderer = null, arScene = null, arCamera = null, arPoints = null;
+let posAttr = null, colAttr = null;
+const MAX_POINTS = 12000;
+let pointWriteIndex = 0, pointsFilled = 0;
+
+let floorMap = new Map();
+let floorBounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0, has: false };
+let coveredAngles = new Set(); // derajat yang sudah pernah dihadap, buat estimasi "sudut cakupan"
+
+// orientasi device -> quaternion (rumus standar dipakai three.js DeviceOrientationControls)
+const DEG2RAD = Math.PI / 180;
+let currentQuat = new THREE.Quaternion();
+let screenOrientAngle = 0;
+const zee = new THREE.Vector3(0, 0, 1);
+const euler = new THREE.Euler();
+const q0 = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+
+function updateQuaternionFromOrientation(alpha, beta, gamma) {
+  euler.set(beta * DEG2RAD, alpha * DEG2RAD, -gamma * DEG2RAD, 'YXZ');
+  currentQuat.setFromEuler(euler);
+  currentQuat.multiply(q1);
+  currentQuat.multiply(q0.setFromAxisAngle(zee, -screenOrientAngle * DEG2RAD));
+}
+
+let orientationReady = false;
+let lastAlpha = 0;
+let usingDragFallback = false;
+const sensorStatusEl = document.getElementById('sensor-status');
+
+function onDeviceOrientation(e) {
+  if (usingDragFallback) return; // sudah pindah ke mode geser jari, abaikan sensor
+  if (e.alpha == null && e.beta == null && e.gamma == null) return; // event kosong, browser kadang kirim event tanpa data
+  orientationReady = true;
+  const alpha = e.alpha ?? lastAlpha;
+  lastAlpha = alpha;
+  updateQuaternionFromOrientation(alpha, e.beta || 0, e.gamma || 0);
+  const deg = Math.round(alpha / 6) * 6;
+  coveredAngles.add(((deg % 360) + 360) % 360);
+  if (sensorStatusEl) sensorStatusEl.textContent = 'Sensor rotasi aktif ✓ — putar badan pelan';
+}
+window.addEventListener('orientationchange', () => { screenOrientAngle = window.orientation || 0; });
+screenOrientAngle = window.orientation || 0;
+
+function hasOrientationSupport() {
+  return typeof DeviceOrientationEvent !== 'undefined';
+}
+
+// ---- fallback: geser jari di layar untuk memutar arah pandang secara manual,
+// dipakai kalau sensor HP tidak mengirim data sama sekali (izin ditolak diam-diam,
+// device tanpa kompas/giroskop, atau browser membatasi akses sensor). ----
+let dragYaw = 0, dragPitch = 0, dragging = false, lastPX = 0, lastPY = 0;
+function enableDragFallback() {
+  if (usingDragFallback) return;
+  usingDragFallback = true;
+  const isDesktop = !('ontouchstart' in window) && (navigator.maxTouchPoints || 0) === 0;
+  const deviceWord = isDesktop ? 'klik-geser mouse' : 'geser jari';
+  if (sensorStatusEl) sensorStatusEl.textContent = `Mode manual aktif — ${deviceWord} di layar untuk memutar arah scan`;
+  arInstruction.textContent = `Perangkat ini tidak punya sensor rotasi. ${isDesktop ? 'Klik lalu geser mouse' : 'Geser jari'} ke kiri/kanan di layar untuk memutar arah pandang, seolah kamu berputar 360° di ruangan.`;
+  arInstruction.style.opacity = '0.85';
+}
+function updateQuaternionFromDrag() {
+  euler.set(dragPitch, dragYaw, 0, 'YXZ');
+  currentQuat.setFromEuler(euler);
+  lastAlpha = -dragYaw * (180 / Math.PI);
+  const deg = Math.round(lastAlpha / 6) * 6;
+  coveredAngles.add(((deg % 360) + 360) % 360);
+}
+arSceneCanvas.addEventListener('pointerdown', (e) => { dragging = true; lastPX = e.clientX; lastPY = e.clientY; });
+window.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  if (!usingDragFallback) enableDragFallback();
+  const dx = e.clientX - lastPX, dy = e.clientY - lastPY;
+  lastPX = e.clientX; lastPY = e.clientY;
+  dragYaw -= dx * 0.005;
+  dragPitch = THREE.MathUtils.clamp(dragPitch - dy * 0.005, -1.1, 1.1);
+  updateQuaternionFromDrag();
+});
+window.addEventListener('pointerup', () => { dragging = false; });
+
+async function requestOrientationPermission() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      const res = await DeviceOrientationEvent.requestPermission();
+      return res === 'granted';
+    } catch (e) { return false; }
+  }
+  return true; // Android & browser lain tidak butuh izin eksplisit
+}
+
+function resetRoomScan() {
+  pointWriteIndex = 0; pointsFilled = 0;
+  floorMap = new Map();
+  floorBounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0, has: false };
+  coveredAngles = new Set();
+  if (posAttr) { posAttr.array.fill(0); posAttr.needsUpdate = true; }
+  if (colAttr) { colAttr.array.fill(0); colAttr.needsUpdate = true; }
+  drawFloorPlan();
+  updateArStats();
+  arInstruction.style.opacity = '0.85';
+}
+
+function initArScene() {
+  arScene = new THREE.Scene();
+  arCamera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 20);
+  arCamera.position.set(0, 0, 0);
+
+  const geo = new THREE.BufferGeometry();
+  const positions = new Float32Array(MAX_POINTS * 3);
+  const colors = new Float32Array(MAX_POINTS * 3);
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  posAttr = geo.getAttribute('position');
+  colAttr = geo.getAttribute('color');
+  const mat = new THREE.PointsMaterial({ size: 0.045, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.92 });
+  arPoints = new THREE.Points(geo, mat);
+  arPoints.frustumCulled = false;
+  arScene.add(arPoints);
+
+  arRenderer = new THREE.WebGLRenderer({ canvas: arSceneCanvas, antialias: true, alpha: true });
+  arRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  arRenderer.setSize(window.innerWidth, window.innerHeight);
+
+  window.addEventListener('resize', () => {
+    if (!arRenderer) return;
+    arCamera.aspect = window.innerWidth / window.innerHeight;
+    arCamera.updateProjectionMatrix();
+    arRenderer.setSize(window.innerWidth, window.innerHeight);
+  });
+}
+
+function pushPoint(x, y, z, hueShift) {
+  const i = pointWriteIndex % MAX_POINTS;
+  posAttr.array[i * 3] = x; posAttr.array[i * 3 + 1] = y; posAttr.array[i * 3 + 2] = z;
+  const c = new THREE.Color().setHSL(0.5 + hueShift * 0.15, 0.8, 0.6);
+  colAttr.array[i * 3] = c.r; colAttr.array[i * 3 + 1] = c.g; colAttr.array[i * 3 + 2] = c.b;
+  pointWriteIndex++; pointsFilled = Math.min(pointsFilled + 1, MAX_POINTS);
+
+  const gx = Math.round(x * 10), gz = Math.round(z * 10);
+  floorMap.set(gx + '_' + gz, true);
+  if (!floorBounds.has) floorBounds = { minX: x, maxX: x, minZ: z, maxZ: z, has: true };
+  else {
+    floorBounds.minX = Math.min(floorBounds.minX, x); floorBounds.maxX = Math.max(floorBounds.maxX, x);
+    floorBounds.minZ = Math.min(floorBounds.minZ, z); floorBounds.maxZ = Math.max(floorBounds.maxZ, z);
+  }
+}
+
+// perkiraan FOV kamera HP pada umumnya (derajat) — kasar, buat estimasi arah saja
+const FOV_X = 62, FOV_Y = 46;
+const BASE_RADIUS = 2.0;
+
+function sampleFrameIntoScan() {
+  // titik dari objek yang terdeteksi: radius diestimasi kasar dari ukuran bbox
+  // (bbox makin besar => diasumsikan makin dekat). Ini perkiraan, bukan pengukuran.
+  lastPreds.forEach(p => {
+    const [x, y, w, h] = p.bbox;
+    const cx = x + w / 2, cy = y + h / 2;
+    const angleX = ((cx / vw) - 0.5) * FOV_X;
+    const angleY = ((cy / vh) - 0.5) * FOV_Y;
+    const sizeRatio = h / vh; // 0..1
+    const estRadius = THREE.MathUtils.clamp(1.1 / Math.max(sizeRatio, 0.05), 0.6, 5.5);
+    addScanPoint(angleX, angleY, estRadius, 0.4);
+  });
+
+  // beberapa titik generik dari mesh scan (dinding/permukaan tanpa objek spesifik)
+  for (let i = 0; i < 6; i++) {
+    const p = mesh[Math.floor(Math.random() * mesh.length)];
+    if (!p) continue;
+    const angleX = ((p.x / vw) - 0.5) * FOV_X;
+    const angleY = ((p.y / vh) - 0.5) * FOV_Y;
+    addScanPoint(angleX, angleY, BASE_RADIUS + (Math.random() - 0.5) * 0.6, -0.2);
+  }
+}
+
+const _localDir = new THREE.Vector3();
+function addScanPoint(angleXdeg, angleYdeg, radius, hueShift) {
+  if (!orientationReady) return;
+  const ax = angleXdeg * DEG2RAD, ay = angleYdeg * DEG2RAD;
+  _localDir.set(Math.sin(ax), -Math.sin(ay), -Math.cos(ax) * Math.cos(ay)).normalize();
+  _localDir.applyQuaternion(currentQuat);
+  pushPoint(_localDir.x * radius, _localDir.y * radius, _localDir.z * radius, hueShift);
+}
+
+function estimateAreaM2() {
+  const cell = 1 / 10;
+  return (floorMap.size * cell * cell).toFixed(1);
+}
+function coverageDegrees() {
+  return Math.min(360, coveredAngles.size * 6);
+}
+function updateArStats() {
+  arStats.textContent = `${pointsFilled.toLocaleString('id-ID')} titik · sudut cakupan ${coverageDegrees()}°`;
+}
+
+function drawFloorPlan() {
+  const W = floorplanCanvas.width, H = floorplanCanvas.height;
+  fpCtx.clearRect(0, 0, W, H);
+  fpCtx.fillStyle = 'rgba(255,255,255,0.03)'; fpCtx.fillRect(0, 0, W, H);
+  if (!floorBounds.has) return;
+
+  const marginM = 0.4;
+  const spanX = Math.max(0.8, (floorBounds.maxX - floorBounds.minX) + marginM * 2);
+  const spanZ = Math.max(0.8, (floorBounds.maxZ - floorBounds.minZ) + marginM * 2);
+  const scale = Math.min(W / spanX, H / spanZ);
+  const cx0 = (floorBounds.minX + floorBounds.maxX) / 2;
+  const cz0 = (floorBounds.minZ + floorBounds.maxZ) / 2;
+  const toPx = (x, z) => [W / 2 + (x - cx0) * scale, H / 2 + (z - cz0) * scale];
+
+  fpCtx.fillStyle = 'rgba(120,255,210,0.85)';
+  floorMap.forEach((_, key) => {
+    const [gx, gz] = key.split('_').map(Number);
+    const [px, pz] = toPx(gx / 10, gz / 10);
+    fpCtx.fillRect(px - 1, pz - 1, 2, 2);
+  });
+
+  // posisi kamu di tengah (asumsi diam di satu titik & berputar)
+  const [ux, uz] = toPx(0, 0);
+  fpCtx.beginPath();
+  fpCtx.arc(ux, uz, 4, 0, Math.PI * 2);
+  fpCtx.fillStyle = '#fff';
+  fpCtx.fill();
+
+  // arah hadap sekarang
+  const a = -lastAlpha * DEG2RAD;
+  fpCtx.beginPath();
+  fpCtx.moveTo(ux, uz);
+  fpCtx.lineTo(ux + Math.sin(a) * 16, uz - Math.cos(a) * 16);
+  fpCtx.strokeStyle = 'rgba(255,255,255,0.7)';
+  fpCtx.lineWidth = 1.5;
+  fpCtx.stroke();
+}
+
+async function startRoomScan() {
+  const granted = await requestOrientationPermission();
+  if (!granted) {
+    toast('Izin sensor gerak/orientasi ditolak. Aktifkan lewat pengaturan browser lalu coba lagi.', 3600);
+    return;
+  }
+
+  roomScanActive = true;
+  usingDragFallback = false;
+  dragYaw = 0; dragPitch = 0;
+  arOverlay.classList.add('active');
+  if (!arRenderer) initArScene();
+  resetRoomScan();
+  if (sensorStatusEl) sensorStatusEl.textContent = 'Menunggu sinyal sensor rotasi…';
+
+  window.addEventListener('deviceorientation', onDeviceOrientation);
+  window.addEventListener('deviceorientationabsolute', onDeviceOrientation);
+
+  const isDesktopDevice = !('ontouchstart' in window) && (navigator.maxTouchPoints || 0) === 0;
+  if (isDesktopDevice) {
+    // laptop/desktop tidak punya sensor rotasi sama sekali — langsung tawarkan mode mouse
+    enableDragFallback();
+    toast('Laptop terdeteksi: klik lalu geser mouse di layar untuk memutar arah scan.', 3200);
+  }
+
+  // kalau dalam 2.5 detik belum ada data sensor sama sekali (di HP), otomatis tawarkan mode geser jari
+  const sensorCheckTimer = setTimeout(() => {
+    if (!orientationReady && roomScanActive) {
+      enableDragFallback();
+      toast('Sensor rotasi tidak terbaca di perangkat ini. Pakai geser jari di layar sebagai gantinya.', 3800);
+    }
+  }, 2500);
+
+  let scanFrame = 0;
+  function loop() {
+    if (!roomScanActive) return;
+    scanFrame++;
+    if ((orientationReady || usingDragFallback) && scanFrame % 3 === 0) sampleFrameIntoScan();
+    posAttr.needsUpdate = true; colAttr.needsUpdate = true;
+    arPoints.geometry.setDrawRange(0, pointsFilled);
+    arCamera.quaternion.copy(currentQuat);
+    arRenderer.render(arScene, arCamera);
+
+    if (scanFrame % 6 === 0) {
+      drawFloorPlan();
+      updateArStats();
+      if (pointsFilled > 200) arInstruction.style.opacity = '0';
+    }
+    requestAnimationFrame(loop);
+  }
+  loop();
+  loop._timer = sensorCheckTimer;
+}
+
+function stopRoomScan() {
+  roomScanActive = false;
+  arOverlay.classList.remove('active');
+  window.removeEventListener('deviceorientation', onDeviceOrientation);
+  window.removeEventListener('deviceorientationabsolute', onDeviceOrientation);
+  toast(`Scan selesai — ${pointsFilled.toLocaleString('id-ID')} titik, cakupan ${coverageDegrees()}°, estimasi ${estimateAreaM2()} m².`, 3400);
+}
+
+resetScanBtn.addEventListener('click', resetRoomScan);
+stopScanBtn.addEventListener('click', stopRoomScan);
+scanRoomBtn.addEventListener('click', startRoomScan);
+
+// tombol tetap aktif walau tanpa sensor rotasi — laptop/HP tanpa sensor otomatis pakai mode mouse/geser jari
+
+// ============================================================
+// INIT
+// ============================================================
+(async function init() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showError('Browser ini tidak mendukung akses kamera (getUserMedia). Coba buka lewat Chrome/Safari terbaru via HTTPS.');
+    return;
+  }
+  try {
+    await startCamera();
+    await loadModel();
+    loading.style.display = 'none';
+    setBadge('mendeteksi…', 'on');
+    detectLoop();
+  } catch (e) {
+    if (!errorBox.classList.contains('show')) showError('Gagal memuat model AI. Cek koneksi internet lalu muat ulang.');
+  }
+})();
+</script>
+</body>
+</html>
